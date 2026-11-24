@@ -1505,3 +1505,22 @@ describe("createClient concurrent payments", () => {
     expect(held.settle).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("createClient budget warnings", () => {
+  it("emits crossed thresholds once", async () => {
+    const policy = createPolicyEngine({
+      budgets: { total: "10000", totalWarningThresholds: [5000, 8000, 9500] },
+    });
+    const events: ClientEvent[] = [];
+    const client = createClient({ network: "testnet", settler: mockSettler(), policy });
+    client.on((event) => events.push(event));
+
+    await client.pay({ resource: OFFER.resource, offer: OFFER });
+    await client.pay({ resource: OFFER.resource, offer: OFFER });
+
+    const warnings = events.filter((event) => event.type === "budget:warning");
+    expect(
+      warnings.map((event) => (event.type === "budget:warning" ? event.threshold : null)),
+    ).toEqual([5000, 8000, 9500]);
+  });
+});

@@ -33,6 +33,7 @@ import {
   type PolicyEngine,
   type PolicyTrace,
   type PolicyTraceComparison,
+  type PolicyUsageSnapshot,
   type QuarantineEntry,
   type ReceiptVerifier,
   type RouteDecision,
@@ -73,6 +74,41 @@ export {
   type SettlementOutcomeKind,
   type SignedTerms,
 } from "./retry.js";
+
+export {
+  createMppChargeSettler,
+  MPP_NETWORK_ID,
+  type MppChargeMode,
+  type MppChargeSettlerOptions,
+  offerAssetContract,
+} from "./mpp-charge-settler.js";
+export {
+  type OfferCheckName,
+  type OfferChecks,
+  OfferRejectedError,
+} from "./offer-checks.js";
+export {
+  DEFAULT_RECEIPT_MAX_SKEW_MS,
+  OfferNetworkMismatchError,
+  ReceiptOfferMismatchError,
+  resourceIdentity,
+} from "./receipt-binding.js";
+export {
+  createMemoryReceiptStore,
+  DEFAULT_RECEIPT_PAGE_SIZE,
+  MAX_RECEIPT_PAGE_SIZE,
+  type ModelSpendTotal,
+  type PayeeSpendTotal,
+  type ReceiptFilter,
+  type ReceiptHistory,
+  type ReceiptQueryPage,
+  type ReceiptQueryResult,
+  type ReceiptStore,
+  type SpendLedger,
+  type SpendLedgerQuery,
+  type SpendLedgerTotals,
+  type SpendTotal,
+} from "./receipt-store.js";
 
 /** Events the client emits so callers and observability can follow along. */
 export type ClientEvent =
@@ -117,7 +153,25 @@ export type ClientEvent =
   /** The shadow policy failed to evaluate or record. The payment is unaffected. */
   | { type: "policy:shadow-error"; resource: string; error: Error }
   | { type: "error"; resource: string; error: Error }
-  | { type: "budget:warning"; remaining: string }
+  | {
+      type: "budget:warning";
+      /** Backwards-compatible remaining value. */
+      remaining: string;
+      rule:
+        | "budget-daily"
+        | "budget-total"
+        | "per-service"
+        | "per-service-daily"
+        | "per-service-window"
+        | "per-resource"
+        | "per-resource-daily"
+        | "per-resource-window";
+      asset: string;
+      threshold: number;
+      used: string;
+      limit: string;
+      periodId: string;
+    }
   /**
    * A channel settler opened or closed a payment channel. The client never
    * opens channels itself: a settler reports these through
@@ -389,6 +443,8 @@ export function createClient(options: TollwayClientOptions): TollwayClient {
         "and only reported in policy:decision events. Switch to enforce before relying on it.",
     );
   }
+
+  const emittedBudgetWarnings = new Map<string, true>();
 
   function emit(event: ClientEvent): void {
     for (const handler of handlers) {
@@ -710,7 +766,9 @@ export function createClient(options: TollwayClientOptions): TollwayClient {
 
       // Budgets advance once, for the model that actually paid.
       if (options.policy) {
+        const usageBefore = await options.policy.usage?.(paidIntent);
         await options.policy.record(paidIntent);
+        await emitBudgetWarnings(options.policy, paidIntent, usageBefore);
       }
       if (options.shadow) {
         await shadowRecord(options.shadow, paidIntent, request.resource);
@@ -725,6 +783,56 @@ export function createClient(options: TollwayClientOptions): TollwayClient {
       const error = normalizeError(rawError);
       emit({ type: "error", resource: request.resource, error });
       throw error;
+    }
+  }
+
+  async function emitBudgetWarnings(
+    policy: PolicyEngine,
+    intent: PaymentIntent,
+    usageBefore?: readonly PolicyUsageSnapshot[],
+  ): Promise<void> {
+    if (!policy.usage) return;
+    let usageAfter: readonly PolicyUsageSnapshot[];
+    try {
+      usageAfter = await policy.usage(intent);
+    } catch {
+      return;
+    }
+
+    for (const after of usageAfter) {
+      const before = usageBefore?.find(
+        (snapshot) =>
+          snapshot.rule === after.rule &&
+          snapshot.asset === after.asset &&
+          snapshot.periodId === after.periodId &&
+          snapshot.resource === after.resource,
+      );
+      const limit = BigInt(after.limit);
+      const used = BigInt(after.used);
+      if (limit <= 0n) continue;
+
+      for (const threshold of after.warningThresholds) {
+        const key = `${after.rule}|${after.asset}|${after.resource ?? ""}|${after.periodId}|${threshold}`;
+        if (emittedBudgetWarnings.has(key)) continue;
+
+        const crossed = used * 10000n >= limit * BigInt(threshold);
+        const wasCrossed =
+          before != null &&
+          BigInt(before.used) * 10000n >= BigInt(before.limit) * BigInt(threshold);
+        if (!crossed || wasCrossed) continue;
+
+        emittedBudgetWarnings.set(key, true);
+        emit({
+          type: "budget:warning",
+          rule: after.rule,
+          asset: after.asset,
+          threshold,
+          used: after.used,
+          limit: after.limit,
+          remaining: after.remaining,
+          periodId: after.periodId,
+        });
+      }
     }
   }
 
@@ -1053,40 +1161,6 @@ function normalizeError(value: unknown): Error {
   return new Error(typeof value === "string" ? value : JSON.stringify(value));
 }
 
-export {
-  createMppChargeSettler,
-  MPP_NETWORK_ID,
-  type MppChargeMode,
-  type MppChargeSettlerOptions,
-  offerAssetContract,
-} from "./mpp-charge-settler.js";
-export {
-  type OfferCheckName,
-  type OfferChecks,
-  OfferRejectedError,
-} from "./offer-checks.js";
-export {
-  DEFAULT_RECEIPT_MAX_SKEW_MS,
-  OfferNetworkMismatchError,
-  ReceiptOfferMismatchError,
-  resourceIdentity,
-} from "./receipt-binding.js";
-export {
-  createMemoryReceiptStore,
-  DEFAULT_RECEIPT_PAGE_SIZE,
-  MAX_RECEIPT_PAGE_SIZE,
-  type ModelSpendTotal,
-  type PayeeSpendTotal,
-  type ReceiptFilter,
-  type ReceiptHistory,
-  type ReceiptQueryPage,
-  type ReceiptQueryResult,
-  type ReceiptStore,
-  type SpendLedger,
-  type SpendLedgerQuery,
-  type SpendLedgerTotals,
-  type SpendTotal,
-} from "./receipt-store.js";
 export {
   createX402Settler,
   PAYMENT_REQUIRED_HEADER,

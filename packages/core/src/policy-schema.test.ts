@@ -249,6 +249,21 @@ describe("createPolicyEngine validation", () => {
       PolicyValidationError,
     );
   });
+
+  it("validates warning thresholds as integers in ascending basis-point order", () => {
+    expect(() =>
+      createPolicyEngine({
+        budgets: { daily: "100", dailyWarningThresholds: [5000, 8000, 9500] },
+        perService: { GSERVICE: { cap: "100", warningThresholds: [5000] } },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      createPolicyEngine({ budgets: { daily: "100", dailyWarningThresholds: [8000, 5000] } }),
+    ).toThrow(PolicyValidationError);
+    expect(() =>
+      createPolicyEngine({ budgets: { daily: "100", dailyWarningThresholds: [50.5] } }),
+    ).toThrow(PolicyValidationError);
+  });
 });
 
 describe("committed JSON Schema", () => {

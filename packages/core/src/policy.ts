@@ -78,6 +78,27 @@ export type PolicyHeadroom = {
   limitedBy: Exclude<ChannelOpenRule, "min-channel-deposit"> | null;
 };
 
+/** One spend ceiling and the usage that currently applies to it. */
+export type PolicyUsageSnapshot = {
+  rule:
+    | "budget-daily"
+    | "budget-total"
+    | "per-service"
+    | "per-service-daily"
+    | "per-service-window"
+    | "per-resource"
+    | "per-resource-daily"
+    | "per-resource-window";
+  asset: string;
+  payee: string;
+  resource?: string;
+  limit: string;
+  used: string;
+  remaining: string;
+  periodId: string;
+  warningThresholds: readonly number[];
+};
+
 /**
  * Spending rules an agent applies before it pays. {@link createPolicyEngine}
  * builds one from a policy.
@@ -122,6 +143,12 @@ export interface PolicyEngine {
    * Optional, like `headroom`.
    */
   evaluateChannelOpen?(open: ChannelOpenIntent): Promise<ChannelOpenDecision>;
+  /**
+   * Returns committed usage for every spend ceiling applying to this intent.
+   * Reservations from a reservation-aware engine are included in `used`.
+   * Optional so engines written before usage snapshots remain source-compatible.
+   */
+  usage?(intent: PaymentIntent): Promise<readonly PolicyUsageSnapshot[]>;
 }
 
 export type AdaptiveAnomalyEvent = {
@@ -1129,6 +1156,137 @@ export function createPolicyEngine(
     };
   }
 
+  function usageOf(intent: PaymentIntent): PolicyUsageSnapshot[] {
+    resetDailyIfNeeded();
+    const now = clock();
+    const snapshots: PolicyUsageSnapshot[] = [];
+    const daily = policy.budgets?.daily;
+    if (daily != null) {
+      const limit = parseAmount(daily);
+      const used = state.dailySpend.get(intent.asset) ?? 0n;
+      snapshots.push({
+        rule: "budget-daily",
+        asset: intent.asset,
+        payee: intent.payee,
+        limit: daily,
+        used: used.toString(),
+        remaining: remaining(limit, used).toString(),
+        periodId: `utc-day:${state.day}`,
+        warningThresholds: policy.budgets?.dailyWarningThresholds ?? [],
+      });
+    }
+    const total = policy.budgets?.total;
+    if (total != null) {
+      const limit = parseAmount(total);
+      const used = state.totalSpend.get(intent.asset) ?? 0n;
+      snapshots.push({
+        rule: "budget-total",
+        asset: intent.asset,
+        payee: intent.payee,
+        limit: total,
+        used: used.toString(),
+        remaining: remaining(limit, used).toString(),
+        periodId: "lifetime",
+        warningThresholds: policy.budgets?.totalWarningThresholds ?? [],
+      });
+    }
+    const service = policy.perService?.[intent.payee];
+    const serviceKeyValue = serviceKey(intent.payee, intent.asset);
+    if (service?.cap != null) {
+      const used = state.serviceSpend.get(serviceKeyValue) ?? 0n;
+      snapshots.push({
+        rule: "per-service",
+        asset: intent.asset,
+        payee: intent.payee,
+        limit: service.cap,
+        used: used.toString(),
+        remaining: remaining(parseAmount(service.cap), used).toString(),
+        periodId: "lifetime",
+        warningThresholds: service.warningThresholds ?? [],
+      });
+    }
+    if (service?.dailyCap != null) {
+      const used = state.serviceDailySpend.get(serviceKeyValue) ?? 0n;
+      snapshots.push({
+        rule: "per-service-daily",
+        asset: intent.asset,
+        payee: intent.payee,
+        limit: service.dailyCap,
+        used: used.toString(),
+        remaining: remaining(parseAmount(service.dailyCap), used).toString(),
+        periodId: `utc-day:${state.day}`,
+        warningThresholds: service.dailyWarningThresholds ?? [],
+      });
+    }
+    if (service?.window != null) {
+      const used = state.serviceWindowSpend.get(serviceKeyValue)?.sum(now) ?? 0n;
+      const windowMs = service.window.windowSeconds * 1_000;
+      snapshots.push({
+        rule: "per-service-window",
+        asset: intent.asset,
+        payee: intent.payee,
+        limit: service.window.cap,
+        used: used.toString(),
+        remaining: remaining(parseAmount(service.window.cap), used).toString(),
+        periodId: `sliding:${service.window.windowSeconds}:${Math.floor(now / windowMs) * windowMs}`,
+        warningThresholds: service.window.warningThresholds ?? [],
+      });
+    }
+    for (const match of policy.perResource
+      ? matchResourceEntries(policy.perResource, intent.resource)
+      : []) {
+      const resourceKeyValue = resourceKey(match.key, intent.asset);
+      if (match.entry.cap != null) {
+        const used = state.resourceSpend.get(resourceKeyValue) ?? 0n;
+        snapshots.push({
+          rule: "per-resource",
+          asset: intent.asset,
+          payee: intent.payee,
+          resource: match.key,
+          limit: match.entry.cap,
+          used: used.toString(),
+          remaining: remaining(parseAmount(match.entry.cap), used).toString(),
+          periodId: "lifetime",
+          warningThresholds: match.entry.warningThresholds ?? [],
+        });
+      }
+      if (match.entry.dailyCap != null) {
+        const used = state.resourceDailySpend.get(resourceKeyValue) ?? 0n;
+        snapshots.push({
+          rule: "per-resource-daily",
+          asset: intent.asset,
+          payee: intent.payee,
+          resource: match.key,
+          limit: match.entry.dailyCap,
+          used: used.toString(),
+          remaining: remaining(parseAmount(match.entry.dailyCap), used).toString(),
+          periodId: `utc-day:${state.day}`,
+          warningThresholds: match.entry.dailyWarningThresholds ?? [],
+        });
+      }
+      if (match.entry.window != null) {
+        const used = state.resourceWindowSpend.get(resourceKeyValue)?.sum(now) ?? 0n;
+        const windowMs = match.entry.window.windowSeconds * 1_000;
+        snapshots.push({
+          rule: "per-resource-window",
+          asset: intent.asset,
+          payee: intent.payee,
+          resource: match.key,
+          limit: match.entry.window.cap,
+          used: used.toString(),
+          remaining: remaining(parseAmount(match.entry.window.cap), used).toString(),
+          periodId: `sliding:${match.entry.window.windowSeconds}:${Math.floor(now / windowMs) * windowMs}`,
+          warningThresholds: match.entry.window.warningThresholds ?? [],
+        });
+      }
+    }
+    return snapshots;
+  }
+
+  async function usage(intent: PaymentIntent): Promise<readonly PolicyUsageSnapshot[]> {
+    return usageOf(intent);
+  }
+
   return {
     mode,
 
@@ -1141,9 +1299,6 @@ export function createPolicyEngine(
     },
 
     async admit(intent: PaymentIntent): Promise<PolicyTrace> {
-      // Evaluating and counting happen in one synchronous step, with no
-      // await between them, so two concurrent attempts cannot both see
-      // the last free slot of an attempts-counted rate limit.
       const trace = evaluateNow(intent);
       if (trace.allowed) countAttempt(intent);
       return trace;
@@ -1166,6 +1321,10 @@ export function createPolicyEngine(
 
     async evaluateChannelOpen(open: ChannelOpenIntent): Promise<ChannelOpenDecision> {
       return evaluateChannelOpenNow(open);
+    },
+
+    async usage(intent: PaymentIntent): Promise<readonly PolicyUsageSnapshot[]> {
+      return usageOf(intent);
     },
   };
 }

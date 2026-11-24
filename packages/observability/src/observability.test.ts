@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  bridgeClientToObservability,
   createMemoryWebhookOutbox,
   createObservabilityHub,
   type DeliveryFailure,
@@ -801,5 +802,41 @@ describe("observability hub: outbox failure handling", () => {
     expect(() => hub.addWebhook({ url: "https://a.test/hook", secret: "" })).toThrow(
       /must not be empty/,
     );
+  });
+});
+
+describe("client observability bridge", () => {
+  it("maps budget warnings to budget.warning without throwing", async () => {
+    let handler: ((event: { type: string; [key: string]: unknown }) => void) | undefined;
+    const client = {
+      on(next: (event: { type: string; [key: string]: unknown }) => void) {
+        handler = next;
+      },
+    };
+    const emitted: TollwayEvent[] = [];
+    const hub = {
+      async emit(event: TollwayEvent) {
+        emitted.push(event);
+        throw new Error("delivery unavailable");
+      },
+    };
+
+    bridgeClientToObservability(client, hub, () => 1_700_000_000_000);
+    handler?.({
+      type: "budget:warning",
+      rule: "budget-daily",
+      asset: "USDC:GA5Z",
+      threshold: 8000,
+      used: "80",
+      limit: "100",
+      remaining: "20",
+      periodId: "utc-day:2026-11-24",
+    });
+    await Promise.resolve();
+
+    expect(emitted[0]).toMatchObject({
+      type: "budget.warning",
+      data: { rule: "budget-daily", threshold: 8000, used: "80", remaining: "20" },
+    });
   });
 });
