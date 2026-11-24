@@ -16,6 +16,34 @@ function intent(overrides: Partial<PaymentIntent> = {}): PaymentIntent {
 }
 
 describe("createPolicyEngine", () => {
+  it("exposes budget usage and UTC-day period ids", async () => {
+    let now = Date.parse("2026-11-24T10:00:00.000Z");
+    const engine = createPolicyEngine(
+      { budgets: { daily: "100", dailyWarningThresholds: [5000] } },
+      { clock: () => now },
+    );
+    const payment = intent({ amount: "60" });
+    await engine.record(payment);
+
+    const usage = await engine.usage!(payment);
+    expect(usage).toContainEqual(
+      expect.objectContaining({
+        rule: "budget-daily",
+        limit: "100",
+        used: "60",
+        remaining: "40",
+        periodId: "utc-day:2026-11-24",
+        warningThresholds: [5000],
+      }),
+    );
+
+    now = Date.parse("2026-11-25T10:00:00.000Z");
+    const next = await engine.usage!(payment);
+    expect(next).toContainEqual(
+      expect.objectContaining({ rule: "budget-daily", used: "0", periodId: "utc-day:2026-11-25" }),
+    );
+  });
+
   describe("daily budget", () => {
     it("allows payments within the daily budget", async () => {
       const engine = createPolicyEngine({ budgets: { daily: "200" } });

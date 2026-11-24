@@ -24,6 +24,7 @@ export {
   type PaymentIntent,
   type PolicyEngine,
   type PolicyHeadroom,
+  type PolicyUsageSnapshot,
 } from "./policy.js";
 export {
   formatPolicyIssues,

@@ -22,6 +22,16 @@ export const POLICY_VERSION = 1;
 export const POLICY_SCHEMA_ID =
   "https://raw.githubusercontent.com/vegaforge/tollway/dev/packages/core/schema/policy.schema.json";
 
+const warningThresholdSchema = z
+  .array(z.number().int().min(1).max(10_000))
+  .refine((values) => values.every((value, index) => index === 0 || value > values[index - 1]!), {
+    message: "warning thresholds must be unique and strictly ascending",
+  })
+  .meta({
+    description:
+      "Unique usage thresholds in basis points, strictly ascending, between 1 and 10000.",
+  });
+
 const integerString = z
   .string()
   .regex(/^[0-9]+$/, "expected an integer string in the asset's smallest unit");
@@ -47,6 +57,7 @@ const windowCapSchema = z.strictObject({
     .min(1)
     .meta({ description: "Length of the sliding window, in whole seconds (at least 1)." }),
   cap: integerString.meta({ description: "Most spend allowed inside any one window." }),
+  warningThresholds: warningThresholdSchema.optional(),
 });
 
 /**
@@ -56,10 +67,12 @@ const windowCapSchema = z.strictObject({
 const capFields = {
   /** Lifetime ceiling: it never resets. */
   cap: integerString.meta({ description: "Lifetime ceiling. It never resets." }).optional(),
+  warningThresholds: warningThresholdSchema.optional(),
   /** Ceiling per UTC day, reset at the same instant as `budgets.daily`. */
   dailyCap: integerString
     .meta({ description: "Ceiling per UTC day, reset at the same instant as budgets.daily." })
     .optional(),
+  dailyWarningThresholds: warningThresholdSchema.optional(),
   /**
    * Sliding-window ceiling, for example 5 USDC per hour. Accounting is
    * approximate to one accumulator bucket; see `RollingSum`.
@@ -253,8 +266,10 @@ export const policySchema = z.strictObject({
     .strictObject({
       /** Spend ceiling per UTC day. */
       daily: integerString.meta({ description: "Spend ceiling per UTC day." }).optional(),
+      dailyWarningThresholds: warningThresholdSchema.optional(),
       /** Lifetime ceiling for this policy. */
       total: integerString.meta({ description: "Lifetime ceiling for this policy." }).optional(),
+      totalWarningThresholds: warningThresholdSchema.optional(),
     })
     .optional(),
   /** Caps per counterparty service, keyed by the payee address or service id. */

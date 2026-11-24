@@ -27,10 +27,28 @@
           "pattern": "^[0-9]+$",
           "description": "Spend ceiling per UTC day."
         },
+        "dailyWarningThresholds": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "description": "Unique usage thresholds in basis points, strictly ascending, between 1 and 10000."
+        },
         "total": {
           "type": "string",
           "pattern": "^[0-9]+$",
           "description": "Lifetime ceiling for this policy."
+        },
+        "totalWarningThresholds": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "description": "Unique usage thresholds in basis points, strictly ascending, between 1 and 10000."
         }
       },
       "additionalProperties": false
@@ -49,10 +67,28 @@
             "pattern": "^[0-9]+$",
             "description": "Lifetime ceiling. It never resets."
           },
+          "warningThresholds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "description": "Unique usage thresholds in basis points, strictly ascending, between 1 and 10000."
+          },
           "dailyCap": {
             "type": "string",
             "pattern": "^[0-9]+$",
             "description": "Ceiling per UTC day, reset at the same instant as budgets.daily."
+          },
+          "dailyWarningThresholds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "description": "Unique usage thresholds in basis points, strictly ascending, between 1 and 10000."
           },
           "window": {
             "type": "object",
@@ -67,6 +103,15 @@
                 "type": "string",
                 "pattern": "^[0-9]+$",
                 "description": "Most spend allowed inside any one window."
+              },
+              "warningThresholds": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000
+                },
+                "description": "Unique usage thresholds in basis points, strictly ascending, between 1 and 10000."
               }
             },
             "required": ["windowSeconds", "cap"],
@@ -92,10 +137,28 @@
             "pattern": "^[0-9]+$",
             "description": "Lifetime ceiling. It never resets."
           },
+          "warningThresholds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "description": "Unique usage thresholds in basis points, strictly ascending, between 1 and 10000."
+          },
           "dailyCap": {
             "type": "string",
             "pattern": "^[0-9]+$",
             "description": "Ceiling per UTC day, reset at the same instant as budgets.daily."
+          },
+          "dailyWarningThresholds": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10000
+            },
+            "description": "Unique usage thresholds in basis points, strictly ascending, between 1 and 10000."
           },
           "window": {
             "type": "object",
@@ -110,6 +173,15 @@
                 "type": "string",
                 "pattern": "^[0-9]+$",
                 "description": "Most spend allowed inside any one window."
+              },
+              "warningThresholds": {
+                "type": "array",
+                "items": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000
+                },
+                "description": "Unique usage thresholds in basis points, strictly ascending, between 1 and 10000."
               }
             },
             "required": ["windowSeconds", "cap"],

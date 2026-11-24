@@ -123,28 +123,62 @@ export type ExportFormat = "json" | "csv";
 
 export type WebhookHandler = (event: TollwayEvent) => void | Promise<void>;
 
-/**
- * A subscription to one or more webhook events delivered via HTTP POST. An
- * `events` list of `undefined` (or empty) means "all events"; otherwise only
- * the listed event types are POSTed to `url`.
- */
+/** A local or HTTP subscription target for webhook events. */
 export type WebhookSubscription = {
-  /**
-   * Stable id stored on outbox rows. Defaults to `url`, so give an explicit
-   * id when the same URL is subscribed more than once.
-   */
   id?: string;
   url: string;
   events?: WebhookEvent[];
-  /** Additional headers to merge into the request. */
   headers?: Record<string, string>;
-  /**
-   * When set, every attempt carries a `Tollway-Signature` header over the
-   * exact body sent. The secret stays in memory and is never written to an
-   * outbox row. An empty string is refused: omit the field to send unsigned.
-   */
   secret?: string;
 };
+
+/** A structural client stream shape that the observability bridge can subscribe to. */
+export type ClientEventStream<T extends { type: string }> = {
+  on(handler: (event: T) => void): void;
+};
+
+/** Bridges agent-side client events to the observability hub. Delivery is fire-and-forget. */
+export function bridgeClientToObservability<T extends { type: string }>(
+  client: ClientEventStream<T>,
+  hub: Pick<ObservabilityHub, "emit">,
+  clock: () => number = Date.now,
+): void {
+  client.on((rawEvent) => {
+    const event = rawEvent as T & Record<string, unknown>;
+    let type: WebhookEvent;
+    let data: Record<string, unknown>;
+
+    if (event.type === "payment") {
+      type = "receipt.created";
+      data = { resource: event.resource, model: event.model, receipt: event.receipt };
+    } else if (event.type === "budget:warning") {
+      type = "budget.warning";
+      data = {
+        rule: event.rule,
+        asset: event.asset,
+        threshold: event.threshold,
+        used: event.used,
+        limit: event.limit,
+        remaining: event.remaining,
+        periodId: event.periodId,
+      };
+    } else if (event.type === "channel:opened") {
+      type = "channel.opened";
+      data = { channelId: event.channelId };
+    } else if (event.type === "channel:closed") {
+      type = "channel.closed";
+      data = { channelId: event.channelId };
+    } else {
+      return;
+    }
+
+    void Promise.resolve(hub.emit({ type, at: new Date(clock()).toISOString(), data })).catch(
+      () => {
+        // Observability delivery is best effort and must never affect pay().
+      },
+    );
+  });
+}
 
 /** Retry policy applied per target (handler or webhook URL). */
 export type RetryPolicy = {

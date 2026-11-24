@@ -13,30 +13,55 @@ type Policy = {
   policyVersion: 1; // required; 0 (unversioned) is migrated on parse
   mode?: "enforce" | "dry-run"; // default "enforce"
   budgets?: {
-    daily?: string;   // spend ceiling per UTC day, integer string in smallest unit
-    total?: string;   // lifetime ceiling for this policy
+    daily?: string; // spend ceiling per UTC day, integer string in smallest unit
+    dailyWarningThresholds?: number[];
+    total?: string; // lifetime ceiling for this policy
+    totalWarningThresholds?: number[];
   };
-  perService?: Record<string, {
-    cap?: string;                                       // lifetime
-    dailyCap?: string;                                  // UTC-day
-    window?: { windowSeconds: number; cap: string };    // sliding window
-  }>;
-  perResource?: Record<string, {
-    cap?: string;
-    dailyCap?: string;
-    window?: { windowSeconds: number; cap: string };
-    match?: "exact" | "prefix";                         // default "exact"
-  }>;
-  perModel?: Partial<Record<SettlementModel, {
-    enabled?: boolean;
-    minChannelDeposit?: string;
-  }>>;
+  perService?: Record<
+    string,
+    {
+      cap?: string; // lifetime
+      warningThresholds?: number[];
+      dailyCap?: string; // UTC-day
+      dailyWarningThresholds?: number[];
+      window?: {
+        windowSeconds: number;
+        cap: string;
+        warningThresholds?: number[];
+      };
+    }
+  >;
+  perResource?: Record<
+    string,
+    {
+      cap?: string;
+      warningThresholds?: number[];
+      dailyCap?: string;
+      dailyWarningThresholds?: number[];
+      window?: {
+        windowSeconds: number;
+        cap: string;
+        warningThresholds?: number[];
+      };
+      match?: "exact" | "prefix"; // default "exact"
+    }
+  >;
+  perModel?: Partial<
+    Record<
+      SettlementModel,
+      {
+        enabled?: boolean;
+        minChannelDeposit?: string;
+      }
+    >
+  >;
   rateLimit?: {
-    requestsPerMinute?: number;                         // shorthand: one 60s window
+    requestsPerMinute?: number; // shorthand: one 60s window
     windows?: { windowSeconds: number; limit: number }[]; // all apply together
-    count?: "settlements" | "attempts";                 // default "settlements"
-    scope?: "global" | "per-counterparty";              // default "global"
-    perCounterpartyKeyLimit?: number;                   // default 1024
+    count?: "settlements" | "attempts"; // default "settlements"
+    scope?: "global" | "per-counterparty"; // default "global"
+    perCounterpartyKeyLimit?: number; // default 1024
   };
   anomaly?: {
     maxSpendPerMinute?: string;
@@ -78,7 +103,10 @@ The engine validates at construction. A bad amount, a negative rate, an unknown 
 In Node, load a JSON policy file with the separate Node-only entry point, which keeps `node:fs` out of the edge-safe main entry:
 
 ```ts
-import { loadPolicyFile, PolicyLoadError } from "@vegaforge/tollway-core/policy-loader";
+import {
+  loadPolicyFile,
+  PolicyLoadError,
+} from "@vegaforge/tollway-core/policy-loader";
 
 try {
   const policy = await loadPolicyFile("./tollway-policy.json");
@@ -141,7 +169,10 @@ const policy: Policy = {
     "/api/quotes/": { match: "prefix", dailyCap: "10000000" },
     // Prefix, rolling window: every route under /api/, 2 USDC per 10 minutes.
     // It also applies to /api/report and /api/quotes/*, on top of their own caps.
-    "/api/": { match: "prefix", window: { windowSeconds: 600, cap: "20000000" } },
+    "/api/": {
+      match: "prefix",
+      window: { windowSeconds: 600, cap: "20000000" },
+    },
   },
 };
 ```
@@ -226,21 +257,21 @@ A channel locks its deposit when it opens, and the deposit is not spent until a 
 
 Rules are evaluated in this order. Static checks on the payment come first, then the stateful ceilings. Every rule runs even after one fails, so the trace is always complete; the decision names the first failure in this order.
 
-| Order | `id` | `rule` (what `check()` reports) | Window |
-| ----- | ---- | ------------------------------- | ------ |
-| 1 | `per-model-disabled` | `per-model-disabled` | none |
-| 2 | `min-channel-deposit` | `min-channel-deposit` | none |
-| 3 | `budget-daily` | `budget` | `utc-day` |
-| 4 | `budget-total` | `budget` | `lifetime` |
-| 5 | `per-service` | `per-service` | `lifetime` |
-| 6 | `per-service-daily` | `per-service-daily` | `utc-day` |
-| 7 | `per-service-window` | `per-service-window` | `sliding`, configurable |
-| 8 | `per-resource` | `per-resource` | `lifetime` |
-| 9 | `per-resource-daily` | `per-resource-daily` | `utc-day` |
-| 10 | `per-resource-window` | `per-resource-window` | `sliding`, configurable |
-| 11 | `rate-limit` | `rate-limit` | `sliding`, 60 seconds |
-| 12 | `anomaly` | `anomaly` | `sliding`, 60 seconds |
-| 13 | `anomaly-adaptive` | `anomaly-adaptive` | `sliding`, 60 seconds |
+| Order | `id`                  | `rule` (what `check()` reports) | Window                  |
+| ----- | --------------------- | ------------------------------- | ----------------------- |
+| 1     | `per-model-disabled`  | `per-model-disabled`            | none                    |
+| 2     | `min-channel-deposit` | `min-channel-deposit`           | none                    |
+| 3     | `budget-daily`        | `budget`                        | `utc-day`               |
+| 4     | `budget-total`        | `budget`                        | `lifetime`              |
+| 5     | `per-service`         | `per-service`                   | `lifetime`              |
+| 6     | `per-service-daily`   | `per-service-daily`             | `utc-day`               |
+| 7     | `per-service-window`  | `per-service-window`            | `sliding`, configurable |
+| 8     | `per-resource`        | `per-resource`                  | `lifetime`              |
+| 9     | `per-resource-daily`  | `per-resource-daily`            | `utc-day`               |
+| 10    | `per-resource-window` | `per-resource-window`           | `sliding`, configurable |
+| 11    | `rate-limit`          | `rate-limit`                    | `sliding`, 60 seconds   |
+| 12    | `anomaly`             | `anomaly`                       | `sliding`, 60 seconds   |
+| 13    | `anomaly-adaptive`    | `anomaly-adaptive`              | `sliding`, 60 seconds   |
 
 Both budget rules report `budget` to `check()` and `PolicyBlockedError`, as they always have. The trace keeps them apart with `id`.
 
@@ -403,3 +434,9 @@ Creating a new engine starts its counters at zero. If an engine is replaced mid-
 ## Reference
 
 [`docs/design.md`, "Policy and budgets"](https://github.com/vegaforge/tollway/blob/main/docs/design.md#policy-and-budgets) is the architectural reference.
+
+## Warning thresholds
+
+Warning thresholds are integer basis points between `1` and `10000`, strictly ascending and unique. For example, `[5000, 8000, 9500]` warns at 50%, 80%, and 95% of one limit. A threshold emits once per crossing in one period; daily periods re-arm at UTC midnight and lifetime periods never re-arm.
+
+The client emits `budget:warning` with `rule`, `asset`, `threshold`, `used`, `limit`, `remaining`, and `periodId`. `threshold` is in basis points. The observability bridge maps this to webhook event `budget.warning` as `TollwayEvent.data`.
